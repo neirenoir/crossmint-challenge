@@ -1,0 +1,8 @@
+{
+  "tasks": {
+    "phase1": "deno run --allow-net --allow-env src/phase1.ts"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1"
+  }
+}
