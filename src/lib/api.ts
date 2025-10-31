@@ -8,36 +8,86 @@ export enum Operation {
 export enum NodeType {
   SPACE = -1,
   POLYANET = 0,
+  SOLOON = 1,
+  COMETH = 2,
+}
+
+export enum SoloonColor {
+  BLUE,
+  RED,
+  PURPLE,
+  WHITE,
+}
+
+export enum ComethDirection {
+  UP,
+  DOWN,
+  RIGHT,
+  LEFT,
 }
 
 export interface MapNode {
   type: NodeType;
   row: number;
   column: number;
+  prop?: SoloonColor | ComethDirection;
 }
 
-function parseMap(rawMap: (string | { type: number } | null)[][]): MapNode[] {
+function parseMap(
+  rawMap:
+    (string | { type: number; direction?: string; color?: string } | null)[][],
+): MapNode[] {
   const map: MapNode[] = [];
 
   for (let row = 0; row < rawMap.length; row++) {
     for (let col = 0; col < rawMap[row].length; col++) {
       const targetNode = rawMap[row][col];
-      let nodeType: NodeType;
+      let nodeType: NodeType = NodeType.SPACE;
+      let prop: SoloonColor | ComethDirection | undefined = undefined;
 
       if (targetNode == null) {
-        // null -> SPACE
         nodeType = NodeType.SPACE;
       } else if (typeof targetNode === "string") {
-        // string -> enum key
-        nodeType = NodeType[targetNode as keyof typeof NodeType];
+        // Example: "RED_SOLOON" or "UP_COMETH"
+        const parts = targetNode.split("_");
+        if (parts.length === 2) {
+          const [prefix, typeName] = parts;
+          if (typeName === "SOLOON") {
+            nodeType = NodeType.SOLOON;
+            const colorKey = prefix.toUpperCase() as keyof typeof SoloonColor;
+            if (colorKey in SoloonColor) prop = SoloonColor[colorKey];
+          } else if (typeName === "COMETH") {
+            nodeType = NodeType.COMETH;
+            const dirKey = prefix.toUpperCase() as keyof typeof ComethDirection;
+            if (dirKey in ComethDirection) prop = ComethDirection[dirKey];
+          } else {
+            nodeType = NodeType.SPACE;
+          }
+        } else {
+          // plain enum member name
+          const key = targetNode.toUpperCase() as keyof typeof NodeType;
+          if (key in NodeType) nodeType = NodeType[key];
+        }
       } else if (typeof targetNode === "object" && "type" in targetNode) {
-        // { type: number } -> use numeric value directly
+        // Object form
         nodeType = targetNode.type as NodeType;
-      } else {
-        nodeType = NodeType.SPACE;
+        if ("direction" in targetNode && targetNode.direction) {
+          const dirKey = (targetNode.direction as string)
+            .toUpperCase() as keyof typeof ComethDirection;
+          if (dirKey in ComethDirection) prop = ComethDirection[dirKey];
+        } else if ("color" in targetNode && targetNode.color) {
+          const colorKey = (targetNode.color as string)
+            .toUpperCase() as keyof typeof SoloonColor;
+          if (colorKey in SoloonColor) prop = SoloonColor[colorKey];
+        }
       }
 
-      map.push({ type: nodeType, row, column: col });
+      map.push({
+        type: nodeType,
+        row,
+        column: col,
+        ...(prop !== undefined ? { prop } : {}),
+      });
     }
   }
 
@@ -125,16 +175,15 @@ export function computeDelta(
   return delta;
 }
 
-async function submitPolyanet(
+async function submitCelestialBody(
+  url: URL,
   candidateId: string,
   op: Operation,
   row: number,
   column: number,
+  prop: Record<string, unknown> | undefined = undefined,
 ): Promise<undefined | Error> {
-  const urlPolyanets = new URL(`polyanets`, API_BASE_URL);
-
-  console.log(op.toString());
-  const res = await fetch(urlPolyanets, {
+  const res = await fetch(url, {
     method: op.toString(),
     headers: {
       "Content-Type": "application/json",
@@ -143,6 +192,7 @@ async function submitPolyanet(
       candidateId: candidateId,
       row: row,
       column: column,
+      ...(prop ? prop : {}),
     }),
   });
 
@@ -158,6 +208,56 @@ async function submitPolyanet(
   return undefined;
 }
 
+async function submitPolyanet(
+  candidateId: string,
+  op: Operation,
+  row: number,
+  column: number,
+): Promise<undefined | Error> {
+  const urlPolyanets = new URL(`polyanets`, API_BASE_URL);
+
+  return await submitCelestialBody(urlPolyanets, candidateId, op, row, column);
+}
+
+async function submitSoloon(
+  candidateId: string,
+  op: Operation,
+  row: number,
+  column: number,
+  color: SoloonColor,
+): Promise<undefined | Error> {
+  const urlSoloons = new URL(`soloons`, API_BASE_URL);
+  const colorText = SoloonColor[color];
+
+  return await submitCelestialBody(
+    urlSoloons,
+    candidateId,
+    op,
+    row,
+    column,
+    { color: colorText.toString().toLowerCase() },
+  );
+}
+
+async function submitCometh(
+  candidateId: string,
+  op: Operation,
+  row: number,
+  column: number,
+  direction: ComethDirection,
+): Promise<undefined | Error> {
+  const urlComeths = new URL(`comeths`, API_BASE_URL);
+  const directionText = ComethDirection[direction];
+  return await submitCelestialBody(
+    urlComeths,
+    candidateId,
+    op,
+    row,
+    column,
+    { direction: directionText.toString().toLowerCase() },
+  );
+}
+
 export async function submit(
   candidateId: string,
   ops: [Operation, MapNode][],
@@ -167,16 +267,33 @@ export async function submit(
     const node = ops[i][1];
 
     try {
+      let err: Error | undefined = undefined;
       if (node.type == NodeType.POLYANET) {
-        const err = await submitPolyanet(
+        err = await submitPolyanet(
           candidateId,
           verb,
           node.row,
           node.column,
         );
-        if (err != null) {
-          throw err;
-        }
+      } else if (node.type == NodeType.SOLOON) {
+        err = await submitSoloon(
+          candidateId,
+          verb,
+          node.row,
+          node.column,
+          node.prop as SoloonColor,
+        );
+      } else if (node.type == NodeType.COMETH) {
+        err = await submitCometh(
+          candidateId,
+          verb,
+          node.row,
+          node.column,
+          node.prop as ComethDirection,
+        );
+      }
+      if (err != null) {
+        throw err;
       }
     } catch (e) {
       if (!(e instanceof Error)) {
@@ -185,9 +302,13 @@ export async function submit(
 
       if (e.message == "Status code: 429") {
         i--;
-        // this is poor man's "sleep"
-        await new Promise((resolve) => setTimeout(resolve, 10 * 1000));
+        // this is the poor man's "sleep"
+        // I don't know how long the rate limit lasts since it is not
+        // documented, so the sleep length is a magic number
+        await new Promise((resolve) => setTimeout(resolve, 5 * 1000));
         continue;
+      } else {
+        return e;
       }
     }
   }
